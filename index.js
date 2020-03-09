@@ -2,6 +2,7 @@ const axios = require('axios');
 const bsv = require('bsv');
 const chalk = require('chalk');
 const prompt = require('prompt-async');
+const boost = require('boostpow-js');
 const PrivateKey = bsv.PrivateKey;
 const Opcode = bsv.Opcode;
 const Transaction = bsv.Transaction;
@@ -10,31 +11,10 @@ const BN = bsv.crypto.BN;
 const sigtype = bsv.crypto.Signature.SIGHASH_ALL | bsv.crypto.Signature.SIGHASH_FORKID;
 const flags = bsv.Script.Interpreter.SCRIPT_VERIFY_MINIMALDATA | bsv.Script.Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID | bsv.Script.Interpreter.SCRIPT_ENABLE_MAGNETIC_OPCODES | bsv.Script.Interpreter.SCRIPT_ENABLE_MONOLITH_OPCODES;
 
-function isBoostPowOutput(script) {
-  return !!(
-    script.chunks.length === 12 &&
-    script.chunks[0].buf &&
-    script.chunks[0].buf.length === 32 &&
-    script.chunks[1].buf &&
-    script.chunks[1].buf.length >= 1 &&
-    script.chunks[2].opcodenum === Opcode.OP_SIZE &&
-    script.chunks[3].opcodenum === Opcode.OP_4 &&
-    script.chunks[4].opcodenum === Opcode.OP_PICK &&
-    script.chunks[5].opcodenum === Opcode.OP_SHA256 &&
-    script.chunks[6].opcodenum === Opcode.OP_SWAP &&
-    script.chunks[7].opcodenum === Opcode.OP_SPLIT &&
-    script.chunks[8].opcodenum === Opcode.OP_DROP &&
-    script.chunks[9].opcodenum === Opcode.OP_EQUALVERIFY &&
-    script.chunks[10].opcodenum === Opcode.OP_DROP &&
-    script.chunks[11].opcodenum === Opcode.OP_CHECKSIG
-  );
-}
-
 function sign(tx, target=''){
   const privKey = PrivateKey.fromRandom();
-  if(!isBoostPowOutput(tx.inputs[0].output.script)){
-    throw("Not a valid BoostPow script");
-  }
+  console.log('toString', tx.toString());
+
   const signature = Transaction.sighash.sign(tx, privKey, sigtype, 0, tx.inputs[0].output.script, new bsv.crypto.BN(tx.inputs[0].output.satoshis), flags);
   if(target!=''){
     const sig256 = bsv.crypto.Hash.sha256(Buffer.concat([signature.toBuffer(), Buffer.from(sigtype.toString(16), 'hex')])).toString('hex');
@@ -66,74 +46,72 @@ function sign(tx, target=''){
 const start = async() => {
   try {
     const {txid} = await prompt.get(["txid"]);
-    if(txid === 'exit') return; //let them exit
-    let tx;
+    if(txid === 'exit') return;
+    let boostJob;
     try {
-      const {data} = await axios.get(`https://api.whatsonchain.com/v1/bsv/main/tx/hash/${txid}`);
-      tx = data;
+      boostJob = await boost.Graph().loadBoostJob(txid);
     } catch(e) {
-      throw("TX not found.");
+      throw(e);
     }
-    let index = -1;
-    for(let i=0; i<tx.vout.length; i++) {
-      if(isBoostPowOutput(bsv.Script.fromHex(tx.vout[i].scriptPubKey.hex))){
-        index = i;
-        break;
-      }
-    }
-    if(index<0){
-      throw("No BoostPow outputs found");
-    }
-    let {to} = await prompt.get(["to"]);
+    console.log('Found Boost Job', 'ScriptHash', boostJob.getScriptHash(), 'Data', boostJob, boostJob.toObject(), 'Txid', boostJob.getTxid());
+
+    // Test public key: 030511ec53f1cfcb0b348b8349b940900672259a46b78807b80e07aa846f506d32
+    let {toPublicKey} = await prompt.get(["toPublicKey"]);
     if(txid === 'exit') return; //let them exit
-    if(!to.length){
-      throw("No address found.");
+    if(!toPublicKey.length){
+      throw("No public key found.");
     }
     try {
-      to = bsv.Script.buildPublicKeyHashOut(to);
+      toPublicKey = bsv.PublicKey.fromHex(toPublicKey);
     } catch(e){
-      throw("Invalid address");
+      throw("Invalid public key");
     }
+    console.log('Public key address: ', toPublicKey.toAddress());
     console.log("Automatically publish when mined? Y/N");
     let {publish} = await prompt.get(["publish"]);
     publish = (publish.toLowerCase()[0] == 'y') ? true : false;
-    console.log(chalk.green(`Mining TX ${txid} output ${index}`));
-    console.log(chalk.green(`Pay to: ${to}`));
-    mineId(tx, index, to, publish);
+    console.log(chalk.green(`Mining TX ${boostJob.getTxid()} output ${boostJob.getVout()}`));
+    console.log(chalk.green(`Pay to: ${toPublicKey.toAddress()}`));
+    mineId(boostJob, toPublicKey, publish);
   } catch(e){
     console.log(chalk.red(e));
     start();
   }
 }
 
-const mineId = async(from, index, to, publish) => {
-    const vout = from.vout[index];
-    const value = Math.floor(vout.value*1e8);
-    const targetScript = bsv.Script.fromHex(vout.scriptPubKey.hex);
-    const target = targetScript.toASM().split(" ")[1].toString('hex');
-
-    //Make initial TX
+const mineId = async(boostJob, toPublicKey, publish) => {
     let tx = new Transaction();
     tx.addInput(
       new Transaction.Input({
         output: new Transaction.Output({
-          script: targetScript,
-          satoshis: value
+          script: boostJob.toScript(),
+          satoshis: boostJob.getValue()
         }),
-        prevTxId: from.txid,
-        outputIndex: index,
+        prevTxId: boostJob.getTxid(),
+        outputIndex: boostJob.getVout(),
         script: bsv.Script.empty()
       })
     );
+    // Initialize the Boost Job Proof
+    console.log('publicKeyBuffer', toPublicKey.toBuffer().toString('hex'), 'addressBuffer', toPublicKey.toAddress().toBuffer().toString('hex'))
+    const jobProof = boost.BoostPowJobProof.fromObject({
+      signature: '0000000000000000000000000000000000000000000000000000000000000001',
+      minerPubKey: toPublicKey.toBuffer().toString('hex'), //'030511ec53f1cfcb0b348b8349b940900672259a46b78807b80e07aa846f506d32',
+      time: '00000000',
+      minerNonce: '0000000000000000',
+      minerAddress: toPublicKey.toAddress().toBuffer().toString('hex'), // '00a0aa1de2a8c424fa20cf453101125e37d8ac3cf0'
+    });
+    jobProof.setMinerNonce(cryptoRandomString({length: 16}));
+    jobProof.setTime(Math.round((new Date()).getTime() / 1000).toString(16));
 
     tx.addOutput(
       new Transaction.Output({
-        satoshis: value-218,
-        script: to
+        satoshis: boostJob.getValue() - 00,
+        script: toPublicKey.toAddress().toBuffer().toString('hex')
       })
     );
 
-    console.log(chalk.green(`Targeting: ${target}`));
+    console.log(chalk.green(`Target Difficulty: ${boostJob.getDiff()}`));
     let newTX;
     while(!newTX){
       newTX = sign(tx, target);
