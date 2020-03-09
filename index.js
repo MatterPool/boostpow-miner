@@ -7,6 +7,7 @@ const PrivateKey = bsv.PrivateKey;
 const Opcode = bsv.Opcode;
 const Transaction = bsv.Transaction;
 const BN = bsv.crypto.BN;
+const cryptoRandomString = require('crypto-random-string');
 
 const sigtype = bsv.crypto.Signature.SIGHASH_ALL | bsv.crypto.Signature.SIGHASH_FORKID;
 const flags = bsv.Script.Interpreter.SCRIPT_VERIFY_MINIMALDATA | bsv.Script.Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID | bsv.Script.Interpreter.SCRIPT_ENABLE_MAGNETIC_OPCODES | bsv.Script.Interpreter.SCRIPT_ENABLE_MONOLITH_OPCODES;
@@ -110,14 +111,36 @@ const mineId = async(boostJob, toPublicKey, publish) => {
         script: toPublicKey.toAddress().toBuffer().toString('hex')
       })
     );
-
     console.log(chalk.green(`Target Difficulty: ${boostJob.getDiff()}`));
+    let boostPowString;
+    let counter = 0;
+    debugLevel = 1;
+
+    while (!boostPowString) {
+        jobProof.setMinerNonce(cryptoRandomString({length: 16}));
+        // jobProof.setTime(Math.round((new Date()).getTime() / 1000).toString(16));
+        boostPowString = boost.BoostPowJob.tryValidateJobProof(boostJob, jobProof);
+        if (counter++ % 500000 === 0 ) {
+            if (debugLevel >= 1) {
+                console.log('Hashes checked: ', counter);
+            }
+        }
+    }
+    console.log('Found Boost Pow String!', boostPowString.toString(), boostPowString.toObject(), jobProof.toObject());
+
+    console.log(chalk.yellow(boostPowString.toString()));
+    console.log('We will create and publish tx later.... Save the above string!');
+    /*
+    Figure out signing stuff later.
+
+
     let newTX;
     while(!newTX){
       newTX = sign(tx, target);
-    }
-    console.log(chalk.yellow(newTX.uncheckedSerialize()));
-    if(!!publish){
+    }*/
+
+
+    /*if(!!publish){
       try {
         const {data} = await axios.post('https://api.whatsonchain.com/v1/bsv/main/tx/raw', { txhex: newTX.uncheckedSerialize() });
         console.log(chalk.green('Published ' + Buffer.from(newTX._getHash()).reverse().toString('hex')));
@@ -126,7 +149,7 @@ const mineId = async(boostJob, toPublicKey, publish) => {
       }
     } else {
       return;
-    }
+    }*/
 }
 
 start();
