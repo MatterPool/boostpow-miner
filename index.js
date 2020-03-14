@@ -12,6 +12,7 @@ const cryptoRandomString = require('crypto-random-string');
 const sigtype = bsv.crypto.Signature.SIGHASH_ALL | bsv.crypto.Signature.SIGHASH_FORKID;
 const flags = bsv.Script.Interpreter.SCRIPT_VERIFY_MINIMALDATA | bsv.Script.Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID | bsv.Script.Interpreter.SCRIPT_ENABLE_MAGNETIC_OPCODES | bsv.Script.Interpreter.SCRIPT_ENABLE_MONOLITH_OPCODES;
 
+/*
 function sign(tx, target=''){
   const privKey = PrivateKey.fromRandom();
   console.log('toString', tx.toString());
@@ -43,7 +44,7 @@ function sign(tx, target=''){
   return tx;
 }
 
-
+*/
 const start = async() => {
   try {
     const {txid} = await prompt.get(["txid"]);
@@ -54,9 +55,24 @@ const start = async() => {
     } catch(e) {
       throw(e);
     }
+    console.log('Sample public and private key');
+
+    const privKey = PrivateKey.fromRandom();
+    console.log('privateKey: ', privKey, privKey.toBuffer().toString('hex'));
+    const publicKey =  privKey.toPublicKey();
+    console.log('publicKey Buffer: ', publicKey.toBuffer().toString('hex'));
+    console.log('publicKeyHash: ',  publicKey.toAddress().toBuffer().toString('hex'));
     console.log('Found Boost Job', 'ScriptHash', boostJob.getScriptHash(), 'Data', boostJob, boostJob.toObject(), 'Txid', boostJob.getTxid());
 
-    // Test public key: 030511ec53f1cfcb0b348b8349b940900672259a46b78807b80e07aa846f506d32
+    //
+    // '0511ec53f1cfcb0b348b8349b940900672259a46b78807b80e07aa846f506d32',
+    // time: '00000000',
+    // nonce: '00000000',
+    // extraNonce1: '00000000',
+    // extraNonce2: '00000000',
+    // minerPubKeyHash: 'a0aa1de2a8c424fa20cf453101125e37d8ac3cf0' });
+
+    // Test public key: 0511ec53f1cfcb0b348b8349b940900672259a46b78807b80e07aa846f506d32
     let {toPublicKey} = await prompt.get(["toPublicKey"]);
     if(txid === 'exit') return; //let them exit
     if(!toPublicKey.length){
@@ -67,7 +83,8 @@ const start = async() => {
     } catch(e){
       throw("Invalid public key");
     }
-    console.log('Public key address: ', toPublicKey.toAddress());
+    console.log('Public key address: ', toPublicKey.toAddress(),toPublicKey._getID());
+
     console.log("Automatically publish when mined? Y/N");
     let {publish} = await prompt.get(["publish"]);
     publish = (publish.toLowerCase()[0] == 'y') ? true : false;
@@ -96,13 +113,20 @@ const mineId = async(boostJob, toPublicKey, publish) => {
     // Initialize the Boost Job Proof
     console.log('publicKeyBuffer', toPublicKey.toBuffer().toString('hex'), 'addressBuffer', toPublicKey.toAddress().toBuffer().toString('hex'))
     const jobProof = boost.BoostPowJobProof.fromObject({
-      signature: '0000000000000000000000000000000000000000000000000000000000000001',
-      minerPubKey: toPublicKey.toBuffer().toString('hex'), //'030511ec53f1cfcb0b348b8349b940900672259a46b78807b80e07aa846f506d32',
-      time: '00000000',
-      minerNonce: '0000000000000000',
-      minerAddress: toPublicKey.toAddress().toBuffer().toString('hex'), // '00a0aa1de2a8c424fa20cf453101125e37d8ac3cf0'
+      signature: '0000000000000000000000000000000000000000000000000000000000000006',
+      minerPubKeyHash: toPublicKey.toAddress().toBuffer().toString('hex').substring(2), // '0000000000000000000000000000000000000001',
+      extraNonce1: "00000002",
+      extraNonce2: "00000003",
+      minerPubKey: '0000000000000000000000000000000000000000000000000000000000000006',
+      time: '12300009',
+      nonce: '00000005',
+      minerPubKey: toPublicKey.toBuffer().toString('hex'),
     });
-    jobProof.setMinerNonce(cryptoRandomString({length: 16}));
+    console.log('jobProof', jobProof.toObject());
+
+    jobProof.setExtraNonce1(cryptoRandomString({length: 8}));
+    jobProof.setExtraNonce2(cryptoRandomString({length: 8}));
+    jobProof.setNonce(cryptoRandomString({length: 8}));
     jobProof.setTime(Math.round((new Date()).getTime() / 1000).toString(16));
 
     tx.addOutput(
@@ -115,10 +139,12 @@ const mineId = async(boostJob, toPublicKey, publish) => {
     let boostPowString;
     let counter = 0;
     debugLevel = 1;
-
+    console.log('jobProof', jobProof.toObject());
     while (!boostPowString) {
-        jobProof.setMinerNonce(cryptoRandomString({length: 16}));
-        // jobProof.setTime(Math.round((new Date()).getTime() / 1000).toString(16));
+        jobProof.setExtraNonce1(cryptoRandomString({length: 8}));
+        jobProof.setExtraNonce2(cryptoRandomString({length: 8}));
+        jobProof.setNonce(cryptoRandomString({length: 8}));
+        jobProof.setTime(Math.round((new Date()).getTime() / 1000).toString(16));
         boostPowString = boost.BoostPowJob.tryValidateJobProof(boostJob, jobProof);
         if (counter++ % 500000 === 0 ) {
             if (debugLevel >= 1) {
@@ -127,7 +153,6 @@ const mineId = async(boostJob, toPublicKey, publish) => {
         }
     }
     console.log('Found Boost Pow String!', boostPowString.toString(), boostPowString.toObject(), jobProof.toObject());
-
     console.log(chalk.yellow(boostPowString.toString()));
     console.log('We will create and publish tx later.... Save the above string!');
     /*
